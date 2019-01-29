@@ -1,0 +1,65 @@
+#Scheduling the job to restore the ICP mongoDb from backup.
+apiVersion: batch/v1
+kind: Job
+metadata:
+name: icp-mongodb-restore
+namespace: kube-system
+spec:
+  template:
+    spec:
+       containers:
+       - name: icp-mangodb-dump
+         image: ibmcom/icp-mongodb:3.6.0
+         imagePullPolicy: IfNotPresent
+         command: ["mongodump", "--host",  "icp-mongodb",  "-u",  "$(ADMIN_USER)",  "-p",  "$(ADMIN_PASSWORD)", "--ssl", "--sslCAFile=/ca/tls.crt", "--sslPEMKeyFile=/work-dir/mongo.pem","/dump", "--verbose"]
+         env:
+         - name: AUTH
+           value: "true"
+         - name: ADMIN_USER
+            valueFrom:
+               secretKeyRef:
+                  key: user
+                  name: icp-mongodb-admin
+         - name: ADMIN_PASSWORD
+           valueFrom:
+              secretKeyRef:
+                 key: password
+                 name: icp-mongodb-admin
+         ports:
+         - containerPort: 27017
+           name: peer
+           protocol: TCP
+         volumeMounts:
+         - mountPath: /ca
+           name: ca
+         - mountPath: /work-dir
+           name: mongodbdir
+           subPath: workdir
+         - mountPath: /dump
+           name: mongodump
+       nodeSelector:
+         role: master
+       restartPolicy: Always
+       tolerations:
+       - effect: NoSchedule
+         key: dedicated
+         operator: Exists
+       - key: CriticalAddonsOnly
+         operator: Exists
+       - effect: NoExecute
+         key: node.kubernetes.io/not-ready
+         operator: Exists
+       - effect: NoExecute
+         key: node.kubernetes.io/unreachable
+         operator: Exists
+       volumes:
+       - name: ca
+         secret:
+            defaultMode: 511
+            secretName: cluster-ca-cert
+       - name: mongodump
+         persistentVolumeClaim:
+            claimName: mongoutil-mongodump
+       - name: mongodbdir
+         persistentVolumeClaim:
+            claimName: mongodbdir-icp-mongodb-0

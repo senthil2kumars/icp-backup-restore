@@ -1,0 +1,101 @@
+---
+#Creating the Persistent Volume.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mongoutil-dump
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  claimRef:
+    namespace: kube-systems
+    name: mongoutil-mongodump
+  nfs:
+    path: /tmp
+    server: 172.0.0.0
+---
+#Creating Persistent volume claim and binding with persistent volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongoutil-mongodump
+  namespace: kube-system
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 15Gi
+  volumeName: "mongoutil-dump"  
+---
+#Scheduling the cronjob to take the icp mongodb backup at every 12 hours.
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: icp-mongodb-dump
+  namespace: kube-system
+spec:
+  schedule: "*/12 * * * *"
+  jobTemplate:
+    spec:
+      template:
+         spec:
+             containers:
+             - name: icp-mangodb-dump
+               image: ibmcom/icp-mongodb:3.6.0
+               imagePullPolicy: IfNotPresent
+               command: ["mongodump", "--host",  "icp-mongodb",  "-u",  "$(ADMIN_USER)",  "-p",  "$(ADMIN_PASSWORD)", "--ssl", "--sslCAFile=/ca/tls.crt", "--sslPEMKeyFile=/work-dir/mongo.pem", "--out",  "/dump", "--verbose"]
+               env:
+               - name: AUTH
+                 value: "true"
+               - name: ADMIN_USER
+                  valueFrom:
+                     secretKeyRef:
+                        key: user
+                        name: icp-mongodb-admin
+               - name: ADMIN_PASSWORD
+                 valueFrom:
+                    secretKeyRef:
+                       key: password
+                       name: icp-mongodb-admin
+               ports:
+               - containerPort: 27017
+                 name: peer
+                 protocol: TCP
+               volumeMounts:
+               - mountPath: /ca
+                 name: ca
+               - mountPath: /work-dir
+                 name: mongodbdir
+                 subPath: workdir
+               - mountPath: /dump
+                 name: mongodump
+             nodeSelector:
+               role: master
+             restartPolicy: Always
+             tolerations:
+             - effect: NoSchedule
+               key: dedicated
+               operator: Exists
+             - key: CriticalAddonsOnly
+               operator: Exists
+             - effect: NoExecute
+               key: node.kubernetes.io/not-ready
+               operator: Exists
+             - effect: NoExecute
+               key: node.kubernetes.io/unreachable
+               operator: Exists
+             volumes:
+             - name: ca
+               secret:
+                  defaultMode: 511
+                  secretName: cluster-ca-cert
+             - name: mongodump
+               persistentVolumeClaim:
+                  claimName: mongoutil-mongodump
+             - name: mongodbdir
+               persistentVolumeClaim:
+                  claimName: mongodbdir-icp-mongodb-0
